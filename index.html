@@ -1,42 +1,284 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <title>Quantum Radar</title>
-  <style>
-    body { background:#000; color:#0f0; text-align:center; font-family:Arial, sans-serif; }
-    h1 { margin-top:40px; }
-    canvas { margin-top:40px; background:#111; border-radius:50%; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Quantum Radar – Pro</title>
+<style>
+  :root{ --green:#00ff7f; --bg:#000; --grid:#0a3a22; --txt:#b9ffd9; }
+  *{ box-sizing:border-box }
+  body{ margin:0; background:var(--bg); color:var(--green); font-family:system-ui,Segoe UI,Arial; }
+  header{ padding:12px 10px 0; text-align:center }
+  h1{ margin:0 0 6px; font-size:22px }
+  #app{ max-width:1100px; margin:0 auto; display:grid; grid-template-columns:1fr 340px; gap:10px; padding:10px }
+  @media(max-width:900px){ #app{ grid-template-columns:1fr } }
+  /* الرادار */
+  #radarWrap{ display:flex; justify-content:center; align-items:center }
+  canvas{ border-radius:50%;
+          background:radial-gradient(circle at 50% 50%, #081108 0%, #020402 70%);
+          box-shadow:0 0 28px rgba(0,255,127,.12) inset; touch-action:none }
+  /* اللوحة */
+  .panel{ background:#06110b; border:1px solid #0a3a22; border-radius:14px; padding:10px; color:var(--txt) }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 }
+  button, input, select, label{ background:#08170e; color:var(--txt); border:1px solid #0a3a22; border-radius:10px; padding:8px 10px; font-size:14px }
+  button{ cursor:pointer }
+  button:hover{ filter:brightness(1.15) }
+  input[type="number"], input[type="text"]{ width:90px }
+  input[type="range"]{ width:180px }
+  .muted{ color:#78eab5; font-size:13px }
+  .status{ min-height:22px; margin-top:6px }
+  .log{ height:180px; overflow:auto; background:#041009; border:1px dashed #0a3a22; border-radius:10px; padding:6px; font-family:ui-monospace,monospace; font-size:12.5px }
+  .log .item{ padding:4px 2px; border-bottom:1px dashed #0a3a22 }
+</style>
 </head>
 <body>
-  <h1>📡 Quantum Radar Simulation</h1>
-  <canvas id="radar" width="300" height="300"></canvas>
-  <p id="status">جارٍ المسح...</p>
+<header>
+  <h1>📡 رادار محاكاة – نسخة متقدمة</h1>
+  <div class="muted">أضف أهدافًا، غيّر السرعة، فعّل الضوضاء، راقب السجل، وصدّر/استورد الأهداف.</div>
+</header>
 
-  <script>
-    const canvas = document.getElementById("radar");
-    const ctx = canvas.getContext("2d");
+<div id="app">
+  <!-- الرادار -->
+  <div id="radarWrap">
+    <canvas id="radar" width="420" height="420"></canvas>
+  </div>
 
-    function drawRadar(angle){
-      ctx.clearRect(0,0,300,300);
-      ctx.beginPath();
-      ctx.arc(150,150,140,0,2*Math.PI);
-      ctx.strokeStyle="#0f0";
-      ctx.stroke();
-      ctx.moveTo(150,150);
-      ctx.lineTo(150+140*Math.cos(angle),150+140*Math.sin(angle));
-      ctx.stroke();
+  <!-- لوحة التحكم -->
+  <div class="panel">
+    <div class="row">
+      <button id="add">➕ هدف عشوائي</button>
+      <button id="manualBtn">➕ إضافة يدويًا</button>
+      <label>زاوية° <input type="number" id="ang" value="42" min="0" max="359"></label>
+      <label>مسافة% <input type="number" id="dist" value="60" min="5" max="95"></label>
+    </div>
+
+    <div class="row">
+      <button id="clear">🧹 مسح الأهداف</button>
+      <button id="pause">⏸️ إيقاف</button>
+      <label>السرعة <input type="range" id="speed" min="0.5" max="4" step="0.1" value="2"> <span id="speedVal">2.0</span>x</label>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" id="beep" checked> صوت</label>
+      <label><input type="checkbox" id="noise"> ضوضاء (نقاط وهمية)</label>
+      <label>حساسية الالتقاط <input type="range" id="window" min="0.04" max="0.2" step="0.01" value="0.09"> <span id="winVal">0.09</span></label>
+    </div>
+
+    <div class="row">
+      <button id="exportBtn">⬇️ تصدير أهداف (JSON)</button>
+      <button id="importBtn">⬆️ استيراد JSON</button>
+      <input id="importBox" type="text" placeholder='ألصق JSON هنا' style="flex:1; min-width:140px">
+    </div>
+
+    <div class="status" id="status">اسحب/المس داخل الرادار لإضافة هدف سريعًا.</div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+  // ===== تهيئة الرسم والرادار =====
+  const canvas = document.getElementById('radar');
+  const ctx = canvas.getContext('2d');
+
+  function fitCanvas(){
+    const size = Math.min(520, Math.min(window.innerWidth, window.innerHeight) - 40);
+    const s = Math.max(280, size);
+    canvas.width = canvas.height = s;
+  }
+  fitCanvas(); window.addEventListener('resize', fitCanvas);
+
+  const C = () => ({ x: canvas.width/2, y: canvas.height/2, r: canvas.width/2 - 10 });
+  const xy = (c,R,a)=>({x:c.x+R*Math.cos(a), y:c.y+R*Math.sin(a)});
+  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+
+  // ===== الحالة =====
+  const statusEl = document.getElementById('status');
+  const logEl = document.getElementById('log');
+  function log(msg){
+    const el = document.createElement('div');
+    el.className='item';
+    el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logEl.prepend(el);
+  }
+
+  const targets = JSON.parse(localStorage.getItem('qr_targets')||'[]');
+  function saveTargets(){ localStorage.setItem('qr_targets', JSON.stringify(targets)); }
+
+  // ===== عناصر التحكم =====
+  const addBtn = document.getElementById('add');
+  const manualBtn = document.getElementById('manualBtn');
+  const clearBtn = document.getElementById('clear');
+  const pauseBtn = document.getElementById('pause');
+  const speedRange = document.getElementById('speed');
+  const speedVal = document.getElementById('speedVal');
+  const winRange = document.getElementById('window');
+  const winVal = document.getElementById('winVal');
+  const beepChk = document.getElementById('beep');
+  const noiseChk = document.getElementById('noise');
+  const angInp = document.getElementById('ang');
+  const distInp = document.getElementById('dist');
+  const exportBtn = document.getElementById('exportBtn');
+  const importBtn = document.getElementById('importBtn');
+  const importBox = document.getElementById('importBox');
+
+  speedVal.textContent = (+speedRange.value).toFixed(1);
+  winVal.textContent = (+winRange.value).toFixed(2);
+  speedRange.oninput = ()=> speedVal.textContent = (+speedRange.value).toFixed(1);
+  winRange.oninput  = ()=> winVal.textContent  = (+winRange.value).toFixed(2);
+
+  // إضافة أهداف
+  function addRandom(){
+    targets.push({
+      r: 0.12 + Math.random()*0.83,
+      a: Math.random()*Math.PI*2,
+      ttl: 0,
+      drift: (Math.random()-0.5)*0.002
+    });
+    saveTargets();
+    statusEl.textContent='✅ تمت إضافة هدف عشوائي.';
+  }
+  function addManual(){
+    const deg = (+angInp.value||0)%360;
+    const pct = clamp(+distInp.value||60, 5, 95);
+    targets.push({ r:pct/100, a:deg*Math.PI/180, ttl:0, drift:0 });
+    saveTargets();
+    statusEl.textContent=`✅ هدف يدوي: زاوية ${deg}° – مسافة ${pct}%`;
+  }
+
+  addBtn.onclick = addRandom;
+  manualBtn.onclick = addManual;
+  clearBtn.onclick = ()=>{ targets.length=0; saveTargets(); statusEl.textContent='🧹 تم مسح الأهداف.'; };
+  exportBtn.onclick = ()=>{
+    importBox.value = JSON.stringify(targets);
+    importBox.select(); importBox.setSelectionRange(0,99999);
+    statusEl.textContent='⬇️ تم نسخ/عرض JSON في الحقل.';
+  };
+  importBtn.onclick = ()=>{
+    try{
+      const arr = JSON.parse(importBox.value||'[]');
+      if(Array.isArray(arr)){ targets.length=0; arr.forEach(t=>targets.push(t)); saveTargets(); statusEl.textContent='⬆️ تم الاستيراد.'; }
+      else statusEl.textContent='⚠️ صيغة غير صحيحة.';
+    }catch{ statusEl.textContent='⚠️ JSON غير صالح.'; }
+  };
+
+  // إضافة باللمس/النقر
+  canvas.addEventListener('pointerdown', e=>{
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const c = C();
+    const dx = x - c.x, dy = y - c.y;
+    const r = clamp(Math.hypot(dx,dy)/c.r, 0.05, 0.95);
+    const a = Math.atan2(dy, dx);
+    targets.push({ r, a, ttl:0, drift:0 });
+    saveTargets();
+    statusEl.textContent = `➕ هدف سريع: زاوية ${Math.round((a*180/Math.PI+360)%360)}° – مسافة ${(r*100).toFixed(0)}%`;
+  }, {passive:true});
+
+  // ===== الصوت =====
+  let audioCtx;
+  function beep(){
+    if(!beepChk.checked) return;
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='sine'; o.frequency.value=900;
+    g.gain.value=0.12; o.connect(g).connect(audioCtx.destination);
+    o.start(); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.12);
+    o.stop(audioCtx.currentTime + 0.13);
+  }
+
+  // ===== الرسم =====
+  function ringColorByR(r){
+    // قريب أحمر، متوسط أصفر، بعيد أخضر
+    if(r<0.33)  return 'rgba(255,90,90,';
+    if(r<0.66)  return 'rgba(255,220,90,';
+    return        'rgba(0,255,127,';
+  }
+
+  function drawGrid(c){
+    ctx.lineWidth=1; ctx.strokeStyle='rgba(0,255,127,0.35)';
+    for(let i=1;i<=4;i++){ ctx.beginPath(); ctx.arc(c.x,c.y,(c.r*i)/4,0,Math.PI*2); ctx.stroke(); }
+    ctx.beginPath(); ctx.moveTo(c.x-c.r, c.y); ctx.lineTo(c.x+c.r, c.y);
+    ctx.moveTo(c.x, c.y-c.r); ctx.lineTo(c.x, c.y+c.r); ctx.stroke();
+  }
+
+  let angle=0, paused=false;
+  pauseBtn.onclick = ()=>{ paused=!paused; pauseBtn.textContent = paused ? '▶️ تشغيل' : '⏸️ إيقاف'; };
+
+  // trail
+  let lastStamp=performance.now();
+  function loop(ts){
+    const dt = Math.max(0, (ts-lastStamp)/1000); lastStamp=ts;
+    const c = C();
+
+    // خلفية تتلاشى (Trail)
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    drawGrid(c);
+
+    // ضوضاء (نقاط وهمية)
+    if(noiseChk.checked){
+      for(let i=0;i<4;i++){
+        const rr = (0.1+Math.random()*0.9)*c.r;
+        const aa = Math.random()*Math.PI*2;
+        const p = xy(c, rr, aa);
+        ctx.fillStyle='rgba(150,255,200,0.08)';
+        ctx.beginPath(); ctx.arc(p.x,p.y, 2, 0, Math.PI*2); ctx.fill();
+      }
     }
 
-    let a=0;
-    setInterval(()=>{
-      drawRadar(a);
-      a+=0.1;
-    },50);
+    // الأهداف
+    const win = +winRange.value;
+    targets.forEach(t=>{
+      // انجراف بسيط
+      t.a += t.drift;
 
-    setTimeout(()=>{
-      document.getElementById("status").textContent="🎯 تم رصد هدف عند الزاوية 42°";
-  </script>
+      const pos = xy(c, t.r*c.r, t.a);
+      const diff = Math.atan2(Math.sin(t.a-angle), Math.cos(t.a-angle));
+      const hit  = Math.abs(diff) < win;
+
+      if(hit){
+        t.ttl = 12;
+        beep();
+        const deg = Math.round((t.a*180/Math.PI+360)%360);
+        const pct = Math.round(t.r*100);
+        statusEl.textContent = `🎯 التقاط: زاوية ${deg}° – مسافة ${pct}%`;
+        log(`🎯 زاوية ${deg}° – مسافة ${pct}%`);
+      }
+
+      // لون حسب المسافة
+      const base = ringColorByR(t.r);
+      ctx.fillStyle = base + (t.ttl>0 ? '1)' : '0.7)');
+      ctx.beginPath(); ctx.arc(pos.x,pos.y, 5, 0, Math.PI*2); ctx.fill();
+      // هالة خفيفة
+      ctx.strokeStyle = base + '0.35)'; ctx.beginPath();
+      ctx.arc(pos.x,pos.y, 10, 0, Math.PI*2); ctx.stroke();
+
+      if(t.ttl>0) t.ttl--;
+    });
+
+    // شعاع المسّاحة + هالة
+    const tip = xy(c, c.r, angle);
+    ctx.strokeStyle='#00ff7f'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+
+    const g = ctx.createRadialGradient(c.x,c.y,0,c.x,c.y,c.r);
+    g.addColorStop(0,'rgba(0,255,127,0.02)');
+    g.addColorStop(1,'rgba(0,255,127,0.10)');
+    ctx.fillStyle=g;
+    ctx.beginPath(); ctx.moveTo(c.x,c.y);
+    ctx.arc(c.x,c.y,c.r, angle-0.33, angle+0.03); ctx.closePath(); ctx.fill();
+
+    // تحديث الزاوية
+    if(!paused){
+      const speed = +speedRange.value; // rad/sec
+      angle += speed * dt;
+      if(angle>Math.PI*2) angle -= Math.PI*2;
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+</script>
 </body>
 </html>
